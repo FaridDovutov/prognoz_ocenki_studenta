@@ -2,6 +2,41 @@ import streamlit as st
 import joblib
 import pandas as pd
 import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin # <-- НУЖНЫЕ ИМПОРТЫ
+
+# --- 0. ОПРЕДЕЛЕНИЕ ПОЛЬЗОВАТЕЛЬСКОГО ТРАНСФОРМАТОРА (ОБЯЗАТЕЛЬНО!) ---
+# Этот класс должен присутствовать в том же файле, где происходит joblib.load
+class RangeToMean(BaseEstimator, TransformerMixin):
+    """Трансформатор, который преобразует строковые диапазоны и конвертирует запятые в точки."""
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X_out = X.copy()
+        
+        for col in X_out.columns:
+            def convert_range(value):
+                if isinstance(value, str) and '-' in value:
+                    try:
+                        lower, upper = map(float, value.split('-'))
+                        return (lower + upper) / 2
+                    except ValueError:
+                        return np.nan
+                try:
+                    if isinstance(value, str):
+                        value = value.replace(',', '.')
+                    return float(value)
+                except (ValueError, TypeError):
+                    return np.nan
+            
+            X_out[col] = X_out[col].apply(convert_range)
+        
+        X_out = X_out.fillna(X_out.median(numeric_only=True))
+        
+        return X_out
+
+# --- КОНСТАНТЫ И ЗАГРУЗКА МОДЕЛИ ---
+# ... (Остальной код загрузки и приложения Streamlit)
 
 # --- КОНСТАНТЫ И ЗАГРУЗКА МОДЕЛИ ---
 # Загружаем сохраненную модель

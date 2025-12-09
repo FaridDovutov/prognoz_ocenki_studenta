@@ -69,7 +69,7 @@ def main():
         col1, col2, col3 = st.columns(3)
         
         student_age = col1.number_input("Синну соли донишҷӯй", min_value=15, max_value=30, value=18)
-        sex = col2.selectbox("Пол", ["Male", "Female"])
+        sex = col2.selectbox("Ҷинс", ["Male", "Female"])
         high_school_type = col3.selectbox("Намуди мактаб", ["Urban", "Rural"])
         
         # Раздел 2: Ресурсы и Активность

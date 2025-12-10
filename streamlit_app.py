@@ -2,11 +2,13 @@ import streamlit as st
 import joblib
 import pandas as pd
 import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin 
-# Дополнительный импорт для совместимости pickle/joblib с Python 3.13+
+from sklearn.base import BaseEstimator, TransformerMixin
 
 # --- 0. ОПРЕДЕЛЕНИЕ ПОЛЬЗОВАТЕЛЬСКОГО ТРАНСФОРМАТОРА (Критически важно!) ---
 # Класс должен быть идентичен классу в файле обучения.
+# Мы оставляем этот класс для корректной десериализации (загрузки) модели,
+# но его логика, которая ломается при прямом вызове predict, будет
+# реализована вручную для столбца 'Weekly_Study_Hours' перед predict.
 class RangeToMean(BaseEstimator, TransformerMixin):
     """Трансформатор, который преобразует строковые диапазоны и конвертирует запятые в точки."""
     def fit(self, X, y=None):
@@ -15,6 +17,22 @@ class RangeToMean(BaseEstimator, TransformerMixin):
     def transform(self, X):
         X_out = X.copy()
         
+        # ! ВНИМАНИЕ: Если этот трансформер в вашем конвейере (pipeline) применяется
+        # ! ТОЛЬКО к 'Weekly_Study_Hours', то цикл 'for col in X_out.columns'
+        # ! должен быть удален ИЛИ заменен на явное указание обрабатываемого столбца/столбцов,
+        # ! чтобы избежать обработки категориальных данных!
+        
+        # Чтобы не изменять класс (поскольку он должен совпадать с обученным),
+        # мы оставим его как есть, но будем использовать РУЧНОЕ ПРЕОБРАЗОВАНИЕ
+        # в функции main ПЕРЕД подачей данных в predict, чтобы обойти ошибку
+        # 'isnan' в этом трансформере при обработке категориальных столбцов.
+        
+        # Если ваша обученная модель имеет ColumnTransformer, RangeToMean
+        # должен получать только числовые столбцы. Если он получает все,
+        # он должен быть написан более устойчиво. Для целей Streamlit
+        # мы просто убедимся, что к predict подаются уже обработанные данные.
+
+        # ... (Остальная часть класса RangeToMean без изменений, только для совместимости)
         for col in X_out.columns:
             def convert_range(value):
                 # Если значение - строка, удаляем лишние пробелы для безопасности
@@ -28,7 +46,7 @@ class RangeToMean(BaseEstimator, TransformerMixin):
                             return (lower + upper) / 2
                         except ValueError:
                             return np.nan
-                
+                    
                 # Шаг 2: Конвертация простых чисел и строк с запятыми в float
                 try:
                     if isinstance(value, str):
@@ -42,6 +60,7 @@ class RangeToMean(BaseEstimator, TransformerMixin):
         X_out = X_out.fillna(X_out.median(numeric_only=True))
         
         return X_out
+
 
 # --- СЛОВАРИ СОПОСТАВЛЕНИЙ (MAPPING) ---
 # Сопоставляем отображаемый текст с ожидаемыми латинскими значениями модели
@@ -70,6 +89,8 @@ except FileNotFoundError:
     st.error("Хатогӣ: Файли модел 'student_grade_predictor.pkl' ёфт нашуд. Лутфан, аввал скрипти омӯзишро иҷро кунед.")
     MODEL_LOADED = False
 except Exception as e:
+    # Важно: здесь мы печатаем e, чтобы понять, связана ли ошибка с RangeToMean
+    # на этапе загрузки (десериализации).
     st.error(f"Хатогӣ ҳангоми боркунии модел: {e}")
     MODEL_LOADED = False
 
@@ -77,6 +98,29 @@ except Exception as e:
 INPUT_FEATURES = ['Student_Age', 'Sex', 'High_School_Type', 'Scholarship', 'A6itional_Work', 
                   'Sports_activity', 'Transportation', 'Weekly_Study_Hours', 'Attendance', 
                   'Reading', 'Notes', 'Listening_in_Class', 'Project_work']
+
+# --- ФУНКЦИЯ ДЛЯ ПРЕОБРАЗОВАНИЯ ДИАПАЗОНОВ (из RangeToMean, только для 'Weekly_Study_Hours') ---
+
+def manual_convert_weekly_study_hours(value_str):
+    """Преобразует строку диапазона ('10-15') или числовую строку ('20') в float."""
+    # 1. Замена запятых на точки (если есть)
+    value_str = str(value_str).strip().replace(',', '.')
+    
+    # 2. Обработка диапазона
+    if '-' in value_str:
+        try:
+            parts = value_str.split('-')
+            lower, upper = map(float, parts)
+            return (lower + upper) / 2
+        except ValueError:
+            # Если не смогли распарсить диапазон, возвращаем NaN
+            return np.nan
+            
+    # 3. Обработка простого числа
+    try:
+        return float(value_str)
+    except (ValueError, TypeError):
+        return np.nan
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ПРИЛОЖЕНИЯ ---
 
@@ -93,7 +137,8 @@ def main():
         st.header("1. Додаҳои демографӣ ва мактабӣ")
         col1, col2, col3 = st.columns(3)
         
-        student_age = col1.number_input("Синну соли донишҷӯй", min_value=15, max_value=30, value=18)
+        # Студенческий возраст должен быть int
+        student_age = col1.number_input("Синну соли донишҷӯй", min_value=15, max_value=30, value=18, step=1)
         sex_display = col2.selectbox("Ҷинс", ["Мужской / Male", "Женский / Female"])
         high_school_type_display = col3.selectbox("Намуди мактаб", ["Городская / Urban", "Сельская / Rural"])
         
@@ -106,6 +151,7 @@ def main():
         sports_activity_display = col6.selectbox("Варзиш", ["Да / Yes", "Нет / No"])
 
         transportation_display = st.selectbox("Воситаи нақлиёт", ["Автобус / Bus", "Личный / Private", "Другое / Other"])
+        # Оставляем ввод текста для диапазона
         weekly_study_hours = st.text_input("Соатҳои таълимии ҳафтаина (масалан, 10-15 ё 20)", value="10-15")
         attendance = st.slider("Фоизи иштирок дар дарс (%)", min_value=0, max_value=100, value=90)
         
@@ -122,12 +168,22 @@ def main():
     # --- Логика прогнозирования ---
     if submitted:
         
-        # ПРЕОБРАЗОВАНИЕ ВВОДА В ФОРМАТ, ОЖИДАЕМЫЙ МОДЕЛЬЮ
+        # !!! КРИТИЧЕСКИЙ ШАГ ИСПРАВЛЕНИЯ: ПРЕОБРАЗУЕМ Weekly_Study_Hours ВРУЧНУЮ !!!
+        
+        # 1. Преобразование 'Weekly_Study_Hours' в среднее значение (float)
+        processed_weekly_hours = manual_convert_weekly_study_hours(weekly_study_hours)
+        
+        # Проверяем, удалось ли преобразование
+        if np.isnan(processed_weekly_hours):
+             st.error("Хатогӣ: Формат 'Соатҳои таълимии ҳафтаина' нодуруст аст. Лутфан, ворид кунед, масалан, '10-15' ё '20'.")
+             return
+
+        # 2. Создание DataFrame с уже обработанным числовым значением для weekly_study_hours
         input_data = pd.DataFrame({
-            # Числовые (ЯВНО float для предотвращения ошибки 'ufunc isnan')
+            # Числовые
             'Student_Age': [float(student_age)],
             'Attendance': [float(attendance)],
-            'Weekly_Study_Hours': [weekly_study_hours], # Оставляем строкой для RangeToMean
+            'Weekly_Study_Hours': [processed_weekly_hours], # Теперь это float, а не строка
             
             # Категориальные (Используем словарь MAPPING)
             'Sex': [MAPPING[sex_display]],
@@ -146,6 +202,11 @@ def main():
         input_data = input_data[INPUT_FEATURES]
 
         try:
+            # Теперь, когда Weekly_Study_Hours уже числовой, RangeToMean
+            # (если он в конвейере и применяется ко всем столбцам)
+            # сможет пропустить этот столбец, а категориальные столбцы
+            # не будут преобразованы в NaN, что позволит ColumnTransformer
+            # корректно обработать строки.
             prediction = best_model.predict(input_data)[0]
             predicted_score = round(prediction, 2)
 
